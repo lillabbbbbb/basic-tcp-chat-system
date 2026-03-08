@@ -2,14 +2,13 @@ const net = require('net');
 const readline = require('readline');
 const chalk = require('chalk').default;
 
-// Setup readline with custom prompt
 const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
     prompt: '> '
 });
 
-// --- Show guide ---
+// Show guide
 function showGuide() {
     console.log(chalk.cyan(`
 ========= NodeChat Guide =========
@@ -25,29 +24,26 @@ Any other text typed will be sent to your current channel.
 `));
 }
 
-// --- Highlight <text> ---
+// Highlight <text>
 function highlightTags(message) {
     return message.replace(/<([^>]+)>/g, (match, p1) => chalk.magenta(`<${p1}>`));
 }
 
-// --- Format messages ---
+// Format messages
 function formatMessage(message) {
     if (!message) return '';
 
     message = highlightTags(message);
 
-    // Private messages
     if (message.startsWith('[DM]')) {
         const parts = message.split(':');
         return chalk.magenta(parts[0] + ':') + ' ' + parts.slice(1).join(':').trim();
     }
 
-    // Join/leave/disconnect notifications
     if (message.includes('joined') || message.includes('left') || message.includes('disconnected')) {
         return chalk.green(message);
     }
 
-    // Channel messages [channel] username: message
     const channelMatch = message.match(/^\[(.+?)\]\s(.+?):\s(.+)/);
     if (channelMatch) {
         const channel = chalk.cyan(`[${channelMatch[1]}]`);
@@ -56,15 +52,17 @@ function formatMessage(message) {
         return `${channel} ${user}: ${text}`;
     }
 
-    // System messages
     if (message.startsWith('Welcome') || message.startsWith('Nickname') || message.startsWith('You must')) {
         return chalk.green(message);
     }
 
-    return message; // Default
+    return message;
 }
 
-// --- Connect to server ---
+// Track current nickname
+let nickname = null;
+
+// Connect to server
 rl.question('Enter server IP (default 127.0.0.1): ', ip => {
     const host = ip.trim() || '127.0.0.1';
     const client = net.createConnection({ host, port: 5000 }, () => {
@@ -73,10 +71,16 @@ rl.question('Enter server IP (default 127.0.0.1): ', ip => {
         rl.prompt();
     });
 
+    // Print server messages
     client.on('data', data => {
         const messages = data.toString().trim().split('\n');
         messages.forEach(msg => {
             if (msg) console.log(formatMessage(msg));
+
+            // Automatically track nickname from server confirmation
+            if (msg.startsWith('Nickname set to')) {
+                nickname = msg.split(' ')[3];
+            }
         });
         rl.prompt();
     });
@@ -86,53 +90,36 @@ rl.question('Enter server IP (default 127.0.0.1): ', ip => {
         process.exit(0);
     });
 
-    rl.on('line', line => {
-        if (line.trim() === '/guide') {
-            showGuide();
-            rl.prompt();
-        } else {
-            client.write(line + '\n');
-        }
-    });
-
     client.on('error', err => {
         console.log(chalk.red('Connection error: ' + err.message));
         process.exit(1);
     });
-});
 
-// Track current nickname
-let nickname = null;
+    // Single readline listener
+    rl.on('line', line => {
+        const trimmed = line.trim();
+        if (!trimmed) return rl.prompt();
 
-rl.on('line', line => {
-    const trimmed = line.trim();
-
-    // /guide command works anytime
-    if (trimmed === '/guide') {
-        showGuide();
-        rl.prompt();
-        return;
-    }
-
-    // /nick command updates nickname
-    if (trimmed.startsWith('/nick')) {
-        const parts = trimmed.split(' ');
-        if (parts[1]) {
-            nickname = parts[1]; // store locally
+        // /guide
+        if (trimmed === '/guide') {
+            showGuide();
+            return rl.prompt();
         }
-        client.write(line + '\n'); // send to server
-        rl.prompt();
-        return;
-    }
 
-    // Prevent sending messages if nickname not set
-    if (!nickname) {
-        console.log(chalk.red('You must set a nickname first with /nick <name>'));
-        rl.prompt();
-        return;
-    }
+        // /nick
+        if (trimmed.startsWith('/nick')) {
+            client.write(trimmed + '\n');
+            return rl.prompt();
+        }
 
-    // All other commands/messages
-    client.write(line + '\n');
-    rl.prompt();
+        // Prevent sending messages if nickname not set
+        if (!nickname) {
+            console.log(chalk.red('You must set a nickname first with /nick <name>'));
+            return rl.prompt();
+        }
+
+        // Send all other input to server
+        client.write(trimmed + '\n');
+        rl.prompt();
+    });
 });
